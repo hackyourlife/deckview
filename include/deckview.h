@@ -8,10 +8,14 @@
 typedef struct {
 	GLuint	yuv8_shader;
 	GLuint	yuv8_shader_tex;
+	GLuint	yuv8_shader_brightness;
+	GLuint	yuv8_shader_interpolate;
 
 	GLuint	yuv10_shader;
 	GLuint	yuv10_shader_tex;
 	GLuint	yuv10_shader_size;
+	GLuint	yuv10_shader_brightness;
+	GLuint	yuv10_shader_interpolate;
 
 	GLuint	frame;
 

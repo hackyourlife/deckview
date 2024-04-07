@@ -1,6 +1,8 @@
 #version 330
 
 uniform sampler2D frame;
+uniform bool interpolate = false;
+uniform float brightness = 1.0;
 
 in  vec2 pos;
 out vec4 color;
@@ -49,6 +51,13 @@ void textureGatherYUV(sampler2D sampler, vec2 tc, out vec4 W, out vec4 X, out ve
 	Z = texelFetch(sampler, clamp(tx + ivec2(1, 0), tmin, tmax), 0);
 }
 
+vec4 color_control(vec4 pixel, float brightness)
+{
+	vec3 scaled = pixel.rgb * vec3(brightness);
+	vec3 clamped = clamp(scaled, vec3(0.0), vec3(1.0));
+	return vec4(clamped, pixel.a);
+}
+
 void main(void)
 {
 	/* The shader uses texelFetch to obtain the YUV macropixels to avoid
@@ -73,16 +82,20 @@ void main(void)
 	// +---------------+
 	vec2 off = fract(pos * textureSize(frame, 0));
 	if(off.x > 0.5) { // right half of macropixel
-		pixel = rec709YCbCr2rgba(macro.a, macro.b, macro.r, alpha);
-		pixel_r = rec709YCbCr2rgba(macro_r.g, macro_r.b, macro_r.r, alpha);
-		pixel_u = rec709YCbCr2rgba(macro_u.a, macro_u.b, macro_u.r, alpha);
-		pixel_ur = rec709YCbCr2rgba(macro_ur.g, macro_ur.b, macro_ur.r, alpha);
+		pixel = color_control(rec709YCbCr2rgba(macro.a, macro.b, macro.r, alpha), brightness);
+		pixel_r = color_control(rec709YCbCr2rgba(macro_r.g, macro_r.b, macro_r.r, alpha), brightness);
+		pixel_u = color_control(rec709YCbCr2rgba(macro_u.a, macro_u.b, macro_u.r, alpha), brightness);
+		pixel_ur = color_control(rec709YCbCr2rgba(macro_ur.g, macro_ur.b, macro_ur.r, alpha), brightness);
 	} else { // left half & center of macropixel
-		pixel = rec709YCbCr2rgba(macro.g, macro.b, macro.r, alpha);
-		pixel_r = rec709YCbCr2rgba(macro.a, macro.b, macro.r, alpha);
-		pixel_u = rec709YCbCr2rgba(macro_u.g, macro_u.b, macro_u.r, alpha);
-		pixel_ur = rec709YCbCr2rgba(macro_u.a, macro_u.b, macro_u.r, alpha);
+		pixel = color_control(rec709YCbCr2rgba(macro.g, macro.b, macro.r, alpha), brightness);
+		pixel_r = color_control(rec709YCbCr2rgba(macro.a, macro.b, macro.r, alpha), brightness);
+		pixel_u = color_control(rec709YCbCr2rgba(macro_u.g, macro_u.b, macro_u.r, alpha), brightness);
+		pixel_ur = color_control(rec709YCbCr2rgba(macro_u.a, macro_u.b, macro_u.r, alpha), brightness);
 	}
 
-	color = bilinear(pixel, pixel_u, pixel_ur, pixel_r, off);
+	if(interpolate) {
+		color = bilinear(pixel, pixel_u, pixel_ur, pixel_r, off);
+	} else {
+		color = pixel;
+	}
 }

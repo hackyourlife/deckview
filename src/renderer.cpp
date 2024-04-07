@@ -38,7 +38,10 @@ static unsigned int frame_depth = 8;
 static unsigned int frame_width = 0;
 static unsigned int frame_height = 0;
 static void* frame = NULL;
+static size_t frame_size = 0;
 
+static float brightness = 1.0;
+static bool clear = true;
 static pthread_mutex_t mutex;
 
 extern "C" {
@@ -124,28 +127,30 @@ HRESULT DeckLinkCaptureDelegate::VideoInputFormatChanged(BMDVideoInputFormatChan
 		}
 
 		pthread_mutex_lock(&mutex);
-		size_t size;
 		switch(fmt) {
 			case bmdFormat8BitYUV:
-				size = (frame_width * 16 / 8) * frame_height;
+				frame_size = (frame_width * 16 / 8) * frame_height;
 				break;
 			case bmdFormat10BitYUV:
-				size = ((frame_width + 47) / 48) * 128 * frame_height;
+				frame_size = ((frame_width + 47) / 48) * 128 * frame_height;
 				break;
 			case bmdFormat10BitRGB:
-				size = ((frame_width + 63) / 64) * 256 * frame_height;
+				frame_size = ((frame_width + 63) / 64) * 256 * frame_height;
 				break;
 			default:
-				size = 0;
+				frame_size = 0;
 				break;
 		}
 
+		// resize framebuffer
 		if(frame) {
-			frame = realloc(frame, size);
+			frame = realloc(frame, frame_size);
 		} else {
-			frame = malloc(size);
+			frame = malloc(frame_size);
 		}
-		memset(frame, 0, size);
+
+		memset(frame, 0, frame_size);
+
 		pixel_format = fmt;
 		frame_depth = depth;
 		pthread_mutex_unlock(&mutex);
@@ -178,8 +183,8 @@ HRESULT DeckLinkCaptureDelegate::VideoInputFrameArrived(IDeckLinkVideoInputFrame
 
 			const size_t size = video_frame->GetRowBytes() * video_frame->GetHeight();
 			if(frame) {
-				if(frame_width * frame_height * 4 < size) {
-					printf("fail! %u vs %lu\n", frame_width * frame_height * 4, size);
+				if(frame_size < size) {
+					printf("fail! %lu vs %lu\n", frame_size, size);
 				} else {
 					pthread_mutex_lock(&mutex);
 					memcpy(frame, frame_bytes, size);
@@ -309,6 +314,8 @@ void GXRender(int width, int height)
 {
 	GXRenderer* self = &renderer;
 
+	bool interpolate = width != (int) frame_width || height != (int) frame_height;
+
 	switch(pixel_format) {
 		case bmdFormat8BitYUV:
 			glUseProgram(self->yuv8_shader);
@@ -316,6 +323,8 @@ void GXRender(int width, int height)
 			glActiveTexture(GL_TEXTURE0);
 			glBindTexture(GL_TEXTURE_2D, self->frame);
 			glUniform1i(self->yuv8_shader_tex, 0);
+			glUniform1f(self->yuv8_shader_brightness, brightness);
+			glUniform1f(self->yuv8_shader_interpolate, interpolate);
 
 			pthread_mutex_lock(&mutex);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame_width / 2, frame_height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, (GLvoid*) frame);
@@ -329,12 +338,14 @@ void GXRender(int width, int height)
 			glBindTexture(GL_TEXTURE_2D, self->frame);
 			glUniform1i(self->yuv10_shader_tex, 0);
 			glUniform2i(self->yuv10_shader_size, frame_width, frame_height);
+			glUniform1f(self->yuv10_shader_brightness, brightness);
+			glUniform1f(self->yuv10_shader_interpolate, interpolate);
 
 			pthread_mutex_lock(&mutex);
 			int tex_width = ((frame_width + 47) / 48) * 128 / 4;
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB10_A2, tex_width, frame_height, 0, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, (GLvoid*) frame);
-			GL_ERROR();
 			pthread_mutex_unlock(&mutex);
+			GL_ERROR();
 			break;
 	}
 
@@ -488,6 +499,18 @@ static void key_handler(GLFWwindow* window, int key, int scancode, int action, i
 			case GLFW_KEY_F5:
 				glfwSetWindowShouldClose(window, GLFW_TRUE);
 				break;
+			case GLFW_KEY_KP_ADD:
+				brightness += 0.25;
+				break;
+			case GLFW_KEY_KP_SUBTRACT:
+				brightness -= 0.25;
+				break;
+			case GLFW_KEY_KP_ENTER:
+				brightness = 1.0;
+				break;
+			case GLFW_KEY_C:
+				clear = !clear;
+				break;
 		}
 	}
 }
@@ -543,6 +566,7 @@ bool GXInit(IDeckLink* dev)
 	glClearColor(0.0, 0.0, 0.0, 0.0);
 
 	GXRendererInit(&renderer);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	return true;
 }
@@ -575,7 +599,12 @@ void GXMain(void)
 		glfwGetFramebufferSize(window, &width, &height);
 
 		glViewport(0, 0, width, height);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		if(clear) {
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			glDisable(GL_BLEND);
+		} else {
+			glEnable(GL_BLEND);
+		}
 
 		GXRender(width, height);
 
@@ -608,6 +637,10 @@ void GXDestroy(void)
 
 	if(attributes) {
 		attributes->Release();
+	}
+
+	if(frame) {
+		free(frame);
 	}
 
 	AXStop();
@@ -725,10 +758,14 @@ void GXRendererInit(GXRenderer* self)
 
 	self->yuv8_shader = GXCreateShader(yuv8_vert, yuv8_frag);
 	self->yuv8_shader_tex = glGetUniformLocation(self->yuv8_shader, "frame");
+	self->yuv8_shader_brightness = glGetUniformLocation(self->yuv8_shader, "brightness");
+	self->yuv8_shader_interpolate = glGetUniformLocation(self->yuv8_shader, "interpolate");
 
 	self->yuv10_shader = GXCreateShader(yuv10_vert, yuv10_frag);
 	self->yuv10_shader_tex = glGetUniformLocation(self->yuv10_shader, "frame");
 	self->yuv10_shader_size = glGetUniformLocation(self->yuv10_shader, "frame_size");
+	self->yuv10_shader_brightness = glGetUniformLocation(self->yuv10_shader, "brightness");
+	self->yuv10_shader_interpolate = glGetUniformLocation(self->yuv10_shader, "interpolate");
 }
 
 void GXCreateBuffers(GXRenderer* self)

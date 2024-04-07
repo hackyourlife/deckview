@@ -2,6 +2,8 @@
 
 uniform sampler2D frame;
 uniform ivec2 frame_size;
+uniform bool interpolate = false;
+uniform float brightness = 1.0;
 
 in  vec2 pos;
 out vec4 color;
@@ -97,18 +99,29 @@ void textureGatherYUV(sampler2D sampler, vec2 tc, out vec3 W, out vec3 X, out ve
 	Z = textureGetYUV(sampler, clamp(px + ivec2(1, 0), tmin, tmax));
 }
 
+vec4 color_control(vec4 pixel, float brightness)
+{
+	vec3 scaled = pixel.rgb * vec3(brightness);
+	vec3 clamped = clamp(scaled, vec3(0.0), vec3(1.0));
+	return vec4(clamped, pixel.a);
+}
+
 void main(void)
 {
 	vec3 W, X, Y, Z;
 	textureGatherYUV(frame, pos, W, X, Y, Z);
 
-	float alpha = 1.0;
+	float alpha = 0.2;
 
-	vec4 pixel = rec709YCbCr2rgba(W.r, W.g, W.b, alpha);
-	vec4 pixel_u = rec709YCbCr2rgba(X.r, X.g, X.b, alpha);
-	vec4 pixel_ur = rec709YCbCr2rgba(Y.r, Y.g, Y.b, alpha);
-	vec4 pixel_r = rec709YCbCr2rgba(Z.r, Z.g, Z.b, alpha);
+	vec4 pixel = color_control(rec709YCbCr2rgba(W.r, W.g, W.b, alpha), brightness);
+	vec4 pixel_u = color_control(rec709YCbCr2rgba(X.r, X.g, X.b, alpha), brightness);
+	vec4 pixel_ur = color_control(rec709YCbCr2rgba(Y.r, Y.g, Y.b, alpha), brightness);
+	vec4 pixel_r = color_control(rec709YCbCr2rgba(Z.r, Z.g, Z.b, alpha), brightness);
 
-	vec2 off = fract(pos * frame_size);
-	color = bilinear(pixel, pixel_u, pixel_ur, pixel_r, off);
+	if(interpolate) {
+		vec2 off = fract(pos * frame_size);
+		color = bilinear(pixel, pixel_u, pixel_ur, pixel_r, off);
+	} else {
+		color = pixel;
+	}
 }
